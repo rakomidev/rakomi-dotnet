@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <PackageId>Rakomi</PackageId>
+    <RootNamespace>Rakomi</RootNamespace>
+    <Description>OpenID Connect discovery for Rakomi: fetches and validates the provider metadata and the JSON Web Key Set of a Rakomi issuer.</Description>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <IsAotCompatible>true</IsAotCompatible>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="/" />
+    <InternalsVisibleTo Include="Rakomi.Tests" />
+  </ItemGroup>
+</Project>

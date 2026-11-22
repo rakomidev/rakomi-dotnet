@@ -1,0 +1,123 @@
+name: Publish to NuGet
+
+# Runs on a version tag v<major>.<minor>.<patch>[-<prerelease>]. The pack job builds, tests and packs the
+# tag commit with no access to an OIDC token. The publish job, bound to the release environment, receives
+# only the packages, checks them against the checksums the pack job recorded, exchanges a GitHub OIDC token
+# for a short-lived NuGet API key (NuGet trusted publishing, no stored NuGet credential) and pushes Rakomi
+# before Rakomi.Sdk, which depends on it.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Version from the tag
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "${TAG}" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "ERROR: tag '${TAG}' is not v<major>.<minor>.<patch>[-<prerelease>]"
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "${GITHUB_OUTPUT}"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          global-json-file: global.json
+
+      - name: Restore (locked)
+        run: dotnet restore --locked-mode
+
+      - name: Build
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: dotnet build -c Release --no-restore -p:Version="${VERSION}" -p:ContinuousIntegrationBuild=true
+
+      - name: Test
+        run: dotnet test -c Release --no-build
+
+      - name: Pack
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          dotnet pack -c Release --no-build -p:Version="${VERSION}" -p:ContinuousIntegrationBuild=true -o dist
+          for ID in Rakomi Rakomi.Sdk; do
+            test -f "dist/${ID}.${VERSION}.nupkg"
+          done
+          (cd dist && sha256sum -- *.nupkg *.snupkg > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: packages
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: packages
+          path: ${{ runner.temp }}/dist
+
+      - name: The packages are the ones the pack job built
+        working-directory: ${{ runner.temp }}/dist
+        run: sha256sum -c SHA256SUMS
+
+      - uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: "10.0.404"
+
+      - name: NuGet login (OIDC)
+        id: login
+        uses: NuGet/login@8d196754b4036150537f80ac539e15c2f1028841 # v1.2.0
+        with:
+          user: ${{ vars.NUGET_USER }}
+
+      - name: Push Rakomi, then Rakomi.Sdk
+        working-directory: ${{ runner.temp }}/dist
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+          VERSION: ${{ needs.pack.outputs.version }}
+        run: |
+          set -euo pipefail
+          for ID in Rakomi Rakomi.Sdk; do
+            dotnet nuget push "${ID}.${VERSION}.nupkg" \
+              --api-key "${NUGET_API_KEY}" \
+              --source https://api.nuget.org/v3/index.json \
+              --skip-duplicate
+          done

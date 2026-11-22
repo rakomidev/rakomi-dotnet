@@ -1,0 +1,9 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Rakomi.Sdk/Rakomi.Sdk.csproj" />
+    <Project Path="src/Rakomi/Rakomi.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Rakomi.Tests/Rakomi.Tests.csproj" />
+  </Folder>
+</Solution>
